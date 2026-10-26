@@ -1,0 +1,15 @@
+# Native theme = the zero-dependency foundation of the "posh" look (per the
+# design research: flip away from default Streamlit red before any CSS).
+# Restrained ink/navy finance palette; light base.
+[theme]
+base = "light"
+primaryColor = "#1f3a5f"              # restrained navy (accents, focus)
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f6f9"  # cards / sidebar / expanders
+textColor = "#18202b"
+font = "sans serif"
+
+[server]
+# No raster/image components are used, but keep static serving off to avoid
+# any PIL path on this host (streamlit 1.37 pins pillow<11; installed is newer).
+enableStaticServing = false

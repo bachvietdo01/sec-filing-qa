@@ -1,0 +1,12 @@
+timestamp,ticker,cik,form,report_date,stem,stage,status,n_facts,statements,grounded,ungrounded,error_type,error
+2026-10-22T04:02:54+00:00,AAL,6201,10-K,2025-12-31,AAL_10K_2025-12-31,done,ok,263,balance_sheet|cash_flows|operations,263,0,,
+2026-10-22T04:03:22+00:00,AAL,6201,10-Q,2026-06-30,AAL_10Q_2026-06-30,done,ok,228,balance_sheet|cash_flows|operations,228,0,,
+2026-10-22T04:03:31+00:00,DIS,1744489,10-K,2025-09-27,DIS_10K_2025-09-27,done,ok,230,balance_sheet|cash_flows|operations,230,0,,
+2026-10-22T04:03:47+00:00,DIS,1744489,10-Q,2026-06-27,DIS_10Q_2026-06-27,done,ok,204,balance_sheet|cash_flows|operations,204,0,,
+2026-10-22T04:03:56+00:00,CRWV,1769628,10-K,2025-12-31,CRWV_10K_2025-12-31,done,ok,296,balance_sheet|cash_flows|operations,296,0,,
+2026-10-22T04:04:15+00:00,CRWV,1769628,10-Q,2026-06-30,CRWV_10Q_2026-06-30,done,ok,256,balance_sheet|cash_flows|operations,256,0,,
+2026-10-22T04:04:30+00:00,BE,1664703,10-K,2025-12-31,BE_10K_2025-12-31,done,ok,345,balance_sheet|cash_flows|operations,345,0,,
+2026-10-22T04:04:52+00:00,BE,1664703,10-Q,2026-06-30,BE_10Q_2026-06-30,done,ok,306,balance_sheet|cash_flows|operations,306,0,,
+2026-10-22T04:05:01+00:00,SONY,313838,,,,discover,error,,,,,no_filings,"no ['10-K', '10-Q'] found (foreign filer? files 20-F?)"
+2026-10-23T16:01:39+00:00,KTOS,1069258,10-K,2025-12-28,KTOS_10K_2025-12-28,done,ok,273,balance_sheet|cash_flows|operations,273,0,,
+2026-10-23T16:01:55+00:00,KTOS,1069258,10-Q,2026-06-28,KTOS_10Q_2026-06-28,done,warn,178,cash_flows|operations,178,0,,missing statements: balance_sheet

@@ -1,0 +1,8 @@
+# secrets and local state — never committed
+.env
+.cache/chrome-profile/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
