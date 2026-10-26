@@ -328,3 +328,18 @@ def test_llm_spellfix_cannot_rewrite_the_question(fake_llm):
 def voice_spell(q):
     import voice
     return voice.spellfix(q)
+
+
+def test_readme_example_dialogue(offline):
+    """The exact exchange shown in README.md — the README must stay true."""
+    k = ent("KTOS")
+    a = core.answer("What was Kratos's revenue growth from 2023 to 2025?", entity=k)
+    assert "+29.9%" in a.text and "+14.0% compound annual growth rate" in a.text
+    assert "+9.6%" in a.text and "+18.5%" in a.text
+    assert {c["page"] for c in a.trace.citations} == {94}
+    b = core.answer("Okay, for each year?", entity=k, context=a.query)
+    assert b.text.startswith("Following up on your last question (Total revenue, FY2023–FY2025)")
+    c = core.answer("What about net income?", entity=k, context=b.query)
+    assert "FY2023" in c.text and "FY2025" in c.text and "isn't meaningful from a loss" in c.text
+    assert core.answer("Tesla automotive revenue 2025", entity=ent("TSLA")).status == "refused"
+    assert core.route("Should I buy NVDA?", entity=ent("NVDA")) == "advice"

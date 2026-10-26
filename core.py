@@ -1194,7 +1194,7 @@ def _answer(question: str, entity, context, holder) -> Answer:
     _carry_periods(q, context, tr)
 
     # --- lanes that need no company ------------------------------------------
-    pre = _pre_lane(q, entity, named)
+    pre = _pre_lane(q, entity, named, context)
     if pre:
         lane, payload = pre
         tr.steps.append(f"lane: {lane}")
@@ -2894,7 +2894,7 @@ _PERSONAL_RE = _re.compile(r"\b(?:my|our)\s+(?:own\s+)?(?:taxes|tax\s+return|hom
                            r"resume|cv|code|budget|portfolio|retirement)\b", _re.I)
 
 
-def _pre_lane(q, entity, named):
+def _pre_lane(q, entity, named, context=None):
     """Lanes decided BEFORE a company is needed, in precedence order. Returns
     (lane, payload) or None. One place, one order — tested directly."""
     rawq = q.raw_question or ""
@@ -2914,7 +2914,12 @@ def _pre_lane(q, entity, named):
         return "explain", term
     if vague and _is_capability(rawq) and not named:
         return "capability", None
-    if vague and _is_social(rawq) and not _is_overview(rawq) and not named:
+    # "Okay, for each year?" after a figure is a follow-up, not small talk: with a
+    # live frame and a follow-up signal, the frame wins over a leading "okay/thanks"
+    followup = (context is not None and getattr(context, "metrics", None)
+                and _FOLLOWUP_RE.search(_norm_text(rawq))
+                and not _re.search(r"\b(?:thanks?|thx|ty|bye|goodbye)\b", rawq.lower()))
+    if vague and _is_social(rawq) and not _is_overview(rawq) and not named and not followup:
         return "smalltalk", None
     if vague and _is_offtopic(rawq):
         return "offtopic", None
