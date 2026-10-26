@@ -532,3 +532,48 @@ def verify_prose(out: str, passages, pages, require_quotes: bool = False) -> str
         if int(p) not in set(pages):
             return f"page p.{p} was not retrieved"
     return "OK"
+
+
+# --------------------------------------------------------------------------- #
+# LLM spell-check — a proposal that must stay a spelling fix
+# --------------------------------------------------------------------------- #
+_SYS_SPELL = (
+    "Correct ONLY the spelling mistakes in the user's message. Do not change, add, "
+    "remove or reorder words; do not rephrase; keep every number, ticker, date and "
+    "punctuation mark exactly. Company names may be corrected to their usual spelling "
+    "(e.g. 'Telsa' -> 'Tesla'). Return only the corrected message, nothing else.")
+
+
+def spellfix(question: str):
+    """(corrected question, [(typed, corrected), ...]) or None. The LLM proposes;
+    code accepts only a token-for-token spelling fix: same word count and order, at
+    most three changed words, each a close spelling of the original, digits and
+    punctuation untouched — so the model cannot rewrite what was asked."""
+    import difflib
+    if not llm.available() or not question or len(question) > 300:
+        return None
+    try:
+        out = (llm.complete(_SYS_SPELL, question, max_tokens=120) or "").strip().strip('"')
+    except Exception:
+        return None
+    a, b = question.split(), out.split()
+    if not out or out == question or len(a) != len(b):
+        return None
+    changes = []
+    for x, y in zip(a, b):
+        if x == y:
+            continue
+        xs, ys = re.sub(r"[^\w]", "", x), re.sub(r"[^\w]", "", y)
+        if re.sub(r"[\w]", "", x) != re.sub(r"[\w]", "", y):
+            return None                                  # punctuation changed
+        if re.sub(r"\D", "", x) != re.sub(r"\D", "", y):
+            return None                                  # a number changed
+        if xs.lower() == ys.lower():
+            continue                                     # case only
+        r = difflib.SequenceMatcher(None, xs.lower(), ys.lower()).ratio()
+        if r < 0.7 or abs(len(xs) - len(ys)) > 2 or len(xs) < 3:
+            return None                                  # not a spelling fix
+        changes.append((xs, ys))
+    if not changes or len(changes) > 3:
+        return None
+    return out, changes

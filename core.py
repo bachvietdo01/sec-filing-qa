@@ -232,7 +232,7 @@ _METRIC_CUES = {
                                   "current liabilities"],
     "dep_amort": ["depreciation and amortization", "depreciation & amortization",
                   "d&a", "depreciation"],
-    "rnd": ["r&d", "research and development", "research"],
+    "rnd": ["r&d", "research and development", "research & development", "research"],
     "operating_cash_flow": ["operating cash flow", "cash from operations",
                             "cash flow from operations", "operating activities",
                             "cash provided by operating", "cash flow", "cash flows",
@@ -255,6 +255,15 @@ _METRIC_CUES = {
                      "stockholders' equity", "shareholders' equity",
                      "total stockholders' equity", "permanent equity",
                      "book value", "net worth"],
+}
+# the phrases that ask for a metric AS A MARGIN (vs. its dollar level)
+_MARGIN_CUES = {
+    "operating_income": ["operating margin", "operating income margin",
+                         "operating profit margin"],
+    "gross_profit": ["gross margin", "gross profit margin"],
+    "net_income": ["net margin", "profit margin", "net income margin", "net profit margin"],
+    "ebitda": ["ebitda margin"],
+    "free_cash_flow": ["fcf margin", "free cash flow margin"],
 }
 _CALC_CUES = {
     "growth": ["growth", "grow", "increase", "change", "yoy", "year over year",
@@ -284,6 +293,8 @@ class Query:
     suggested_metric: str | None = None            # LLM guess when text names none
     prose_hint: str = ""                           # carried metric for "why...?"
     margin_metrics: list = field(default_factory=list)  # metrics "margin" modifies
+    items: list = field(default_factory=list)      # [(metric, calc)] when one question
+                                                   # asks a metric as a level AND a margin
 
 
 @dataclass(frozen=True)
@@ -422,6 +433,34 @@ def _has_prose_cue(text: str, has_metric: bool) -> bool:
                                 "material weakness", "capital resources",
                                 "risk factor"])
     return strong or (has_metric and why_cue) or (not has_metric and weak)
+
+
+def _requested_items(q) -> list:
+    """Split a question into (metric, calc) items when "margin" doesn't apply to
+    every metric: "revenue, operating income and operating margin" is revenue
+    (level), operating income (level) AND operating income (margin) — never a
+    "total revenue margin". Empty when one calc covers the whole question."""
+    t = _norm_text(q.raw_question)
+    mks = [m for m in (q.metrics or []) if m in METRICS or m in COMPUTED]
+    if not mks:
+        return []
+    items, any_margin = [], False
+    for m in mks:
+        mspans = [(x.start(), x.end()) for c in _MARGIN_CUES.get(m, [])
+                  for x in _re.finditer(r"\b" + _re.escape(c) + r"\b", t)]
+        level = any(not any(s0 <= x.start() < e0 for s0, e0 in mspans)
+                    for c in _METRIC_CUES.get(m, []) if "margin" not in c
+                    for x in _re.finditer(r"\b" + _re.escape(c) + r"\b", t))
+        if mspans and m != "revenue":
+            any_margin = True
+            if level:
+                items.append((m, "none"))
+            items.append((m, "margin"))
+        else:
+            items.append((m, "none"))
+    if not any_margin or len(items) < 2:
+        return []
+    return items
 
 
 def _cue_spans(q: str) -> dict:
@@ -962,10 +1001,108 @@ def _sanitize(question: str) -> str:
     return _re.sub(r"\s+", " ", q).strip()
 
 
-def answer(question: str, entity=None, context=None) -> Answer:
+_TYPO_JOINS = {"cashflow": "cash flow", "cashflows": "cash flows", "netincome": "net income",
+               "freecashflow": "free cash flow", "grossprofit": "gross profit",
+               "opex": "opex", "capex": "capex"}
+
+
+def _cue_vocab() -> set:
+    words = set()
+    for cues in list(_METRIC_CUES.values()) + list(_MARGIN_CUES.values()) + list(_CALC_CUES.values()):
+        for c in cues:
+            words |= {w for w in _re.findall(r"[a-z]+", c) if len(w) >= 6}
+    # only DISTINCTIVE metric words (6+ letters) are correction targets, so an
+    # ordinary word ("cover", "year") is never pulled toward a short cue ("over")
+    return words | {"revenues", "quarterly", "earnings", "expenses", "dividend"}
+
+
+_REAL_WORDS = None
+
+
+def _real_words() -> set:
+    """Every word that occurs in the banked filings' own prose (~4 MB of English)
+    plus their line-item labels: a word found there is a real word, never a typo."""
+    global _REAL_WORDS
+    if _REAL_WORDS is None:
+        words = set()
+        try:
+            for c in bank.load_prose():
+                words |= set(_re.findall(r"[a-z]{4,}", c.get("text", "").lower()))
+            for f in bank.load_facts():
+                words |= set(_re.findall(r"[a-z]{4,}", f.get("raw_label", "").lower()))
+        except Exception:
+            pass
+        _REAL_WORDS = words
+    return _REAL_WORDS
+
+
+def _fix_typos(question: str):
+    """Correct a misspelled METRIC word ("operrating income", "reveune", "net
+    incme") toward the app's own cue vocabulary — only for a close, unique match,
+    and never silently: returns (fixed question, [(typed, read_as), ...]) so the
+    answer can say what it assumed."""
+    import difflib
+    vocab = _cue_vocab()
+    keep = vocab | _FUNCTION_WORDS | _alias_words() | {
+        "incoming", "operator", "operators", "marginal", "profile", "profiles",
+        "covered", "current", "currency", "capital", "income", "equity"}
+    fixes = []
+
+    def sub(m):
+        w = m.group(0)
+        lw = w.lower()
+        if lw in _TYPO_JOINS and _TYPO_JOINS[lw] != lw:
+            fixes.append((w, _TYPO_JOINS[lw]))
+            return _TYPO_JOINS[lw]
+        if len(lw) < 5 or lw in keep or not lw.isalpha() or w[:1].isupper():
+            return w                        # proper nouns (Apple, Delta) are names, not typos
+        if lw in _real_words():
+            return w                        # a real word ("internet", "repurchases")
+        cands = difflib.get_close_matches(lw, sorted(vocab), n=2, cutoff=0.84)
+        if not cands:
+            return w
+        best = difflib.SequenceMatcher(None, lw, cands[0]).ratio()
+        if len(cands) > 1 and difflib.SequenceMatcher(None, lw, cands[1]).ratio() >= best - 0.03:
+            return w                        # two near-equal readings: don't guess
+        fixes.append((w, cands[0]))
+        return cands[0]
+    fixed = _re.sub(r"[A-Za-z]+", sub, question or "")
+    return fixed, fixes
+
+
+_MISS_LANES = {"capability", "unexplained", "need_metric", "clarify", "need_company",
+               "unbanked_company", "untracked"}
+
+
+def answer(question: str, entity=None, context=None, _spell_retry: bool = True) -> Answer:
     """Answer one question. `context` is the previous answer's `.query` (the UI
-    passes it) so a follow-up can inherit its metric and periods."""
+    passes it) so a follow-up can inherit its metric and periods.
+
+    If the question wasn't understood, an LLM spell-check may propose a corrected
+    question; voice.spellfix accepts it only as a word-for-word spelling fix, the
+    corrected question is answered by the same code path, and the reply says what
+    it read."""
+    first = _answer_once(question, entity, context)
+    lanes = [s_[6:] for s_ in first.trace.steps if s_.startswith("lane: ")]
+    if not (_spell_retry and llm.available() and lanes and lanes[-1] in _MISS_LANES):
+        return first
+    prop = voice.spellfix(_sanitize(question))
+    if not prop:
+        return first
+    fixed, changes = prop
+    second = _answer_once(fixed, entity, context)
+    lanes2 = [s_[6:] for s_ in second.trace.steps if s_.startswith("lane: ")]
+    if lanes2 and lanes2[-1] in _MISS_LANES and second.status == first.status:
+        return first                  # the spelling fix didn't help: keep the original
+    shown = ", ".join(f"“{t}” as “{r}”" for t, r in changes)
+    second.text += f" (I read {shown}.)"
+    second.trace.steps.append(f"spelling (LLM, verified word-for-word): {changes}")
+    return second
+
+
+def _answer_once(question: str, entity=None, context=None) -> Answer:
     question = _sanitize(question)
+    question, typo_fixes = _fix_typos(question)
     holder = {}
     a = _answer(question, entity, context, holder)
     a.query = holder.get("q")
@@ -976,6 +1113,12 @@ def answer(question: str, entity=None, context=None) -> Answer:
         years = " ".join(_re.findall(r"\b(?:19|20)\d{2}\b", question or ""))
         a.text = voice.render("refusal" if a.status == "refused" else "hedge",
                               a.text, question, trace=a.trace, allowed_text=years)
+    if holder.get("typed_company"):
+        typo_fixes = list(typo_fixes) + [holder["typed_company"]]
+    if typo_fixes and a.status != "refused" and not converse:
+        shown = ", ".join(f"“{t}” as “{r}”" for t, r in typo_fixes[:3])
+        a.text += f" (I read {shown}.)"
+        a.trace.steps.append(f"spelling: read {typo_fixes}")
     return a
 
 
@@ -1007,6 +1150,9 @@ def _answer(question: str, entity, context, holder) -> Answer:
     if leg_years and not set(leg_years) <= set(q.years):
         q.years = _expand_year_range(rawq, sorted(set(q.years) | set(leg_years)))
     _rl = rawq.lower()
+    q.items = _requested_items(q)
+    if q.items:
+        tr.steps.append(f"asked items: {q.items}")
     if q.calc == "margin" and len(q.metrics or []) > 1:
         # which metrics does "margin" actually modify? the cue followed by "margin"
         sp = _cue_spans(_norm_text(rawq))
@@ -1036,6 +1182,8 @@ def _answer(question: str, entity, context, holder) -> Answer:
                     + (f" legs={[(lg.kind, lg.year, lg.quarter) for lg in q.legs]}"
                        if _legs_hetero(q.legs) else ""))
     named = _companies_named(rawq)
+    if named and getattr(named[0], "_typed", None):
+        holder["typed_company"] = (named[0]._typed, named[0].title)
     if (context is not None and getattr(context, "_cik", None) and named
             and named[0].cik != context._cik and _COMPARE_TO_RE.search(_norm_text(rawq))):
         tr.steps.append("lane: multi_company")
@@ -1464,6 +1612,8 @@ def _answer_factual(ent, q, tr) -> Answer:
                             f"{_period_tag(*prior)}")
         return _answer_growth(ent, q, periods, tr, mks)
     # Several figures and/or several periods -> decompose into per-period atoms
+    if q.items and q.calc != "growth":
+        return _answer_multi(ent, q, periods, tr, mks)
     if mks and (len(mks) > 1 or len(periods) > 1):
         return _answer_multi(ent, q, periods, tr, mks)
     qq, y = periods[0]
@@ -1889,7 +2039,8 @@ def _figure(ent, q, year, mk) -> dict:
     computed value. The single-period ATOM that the multi-period composer maps
     over — decomposition lives here, not inside each answerer."""
     targets = q.margin_metrics
-    use_margin = q.calc == "margin" and (not targets or mk in targets)
+    use_margin = (q.calc == "margin" and (not targets or mk in targets)
+                  and mk != "revenue")
     return (_margin_figure(ent, q, year, mk) if use_margin
             else _metric_figure(ent, q, year, mk))
 
@@ -1909,11 +2060,14 @@ def _answer_multi(ent, q, periods, tr, metric_keys, pp_change=False) -> Answer:
     fiscal 2025'), each grounded and cited. `periods` is a list of (per-period
     query, year), so every leg is answered in its own period kind."""
     lines, missing, confs = [], set(), []
-    for mk in metric_keys:
+    plan = list(q.items) if q.items else [(mk, None) for mk in metric_keys]
+    for mk, calc in plan:
         cells, nums = [], []
         name = None
         nongaap = False
         for qq, y in periods:
+            if calc is not None:               # this item's own calc (level / margin)
+                qq = replace(qq, calc=calc, margin_metrics=[])
             r = _figure(ent, qq, y, mk)           # per-period atom (margin-aware)
             if r["ok"]:
                 name = r["name"]
@@ -2158,6 +2312,8 @@ def _untracked_matches(text: str, ent=None) -> list:
     import difflib
     for m in _OPEN_NOUN_RE.finditer(t):
         w = _re.sub(r"'s?$", "", m.group(1))
+        if w.endswith("s") and w[:-1] in ok:
+            continue                         # "nvidias revenue": a possessive, not a part
         if len(w) >= 4 and difflib.get_close_matches(w, list(co_words), n=1, cutoff=0.8):
             continue                     # "Vertv" ~ "vertiv": a typo'd company name
         if w not in ok and not w.isdigit():
@@ -2485,7 +2641,7 @@ def _companies_named(text: str) -> list:
                     pos.append(m.start())
         for w in _re.findall(r"[a-z]{4,}", title.lower()):
             if w not in _GENERIC_NAME_WORDS:
-                m = _re.search(rf"\b{w}\b", low)
+                m = _re.search(rf"\b{w}(?:'?s)?\b", low)
                 if m:
                     pos.append(m.start())
         # capitalized-only name words ("Intuitive", "Bloom") — English words too
@@ -2510,7 +2666,9 @@ def _companies_named(text: str) -> list:
             if g:
                 tk, title, cik = names[g[0]]
                 if bank.facts_for(cik):
-                    hits[tk] = (m.start(), edgar.Entity(cik=cik, ticker=tk, title=title))
+                    fe = edgar.Entity(cik=cik, ticker=tk, title=title)
+                    fe._typed = m.group(0)          # disclosed: "I read Nvidea as …"
+                    hits[tk] = (m.start(), fe)
     return [e for _p, e in sorted(hits.values(), key=lambda x: x[0])]
 
 

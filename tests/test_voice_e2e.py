@@ -283,3 +283,48 @@ def test_inferred_period_end_is_never_shown_as_exact(offline):
     assert a.trace.citations[0]["period_end"] is None
     b = core.answer("Disney revenue nine months 2026", entity=ent("DIS"))
     assert b.trace.citations[0]["period_end"] == "2026-06-27"
+
+
+# --- level + margin items; spelling (deterministic + verified LLM) ------------- #
+def test_revenue_operating_income_and_operating_margin(offline):
+    a = core.answer("Okay what's the latest revenue, operating income and operating margin ?",
+                    entity=ent("TSLA"))
+    assert "Total revenue: FY2025 $94,827" in a.text
+    assert "Operating income: FY2025 $4,355" in a.text and "margin: FY2025 4.6%" in a.text
+    assert "revenue margin" not in a.text.lower()
+
+
+@pytest.mark.parametrize("q,needle,typed", [
+    ("What is operrating income ?", "4,355", "operrating"),
+    ("tesla reveune 2025", "94,827", "reveune"),
+    ("operating cashflow 2025", "14,747", "cashflow"),
+])
+def test_metric_typos_corrected_and_disclosed(offline, q, needle, typed):
+    a = core.answer(q, entity=ent("TSLA"))
+    assert a.status == "answered" and needle in a.text and f"“{typed}”" in a.text
+
+
+def test_typo_corrector_leaves_real_words_alone(offline):
+    for q in ["do you cover Apple?", "what is the operator margin", "What was revenue in 2025?"]:
+        assert core._fix_typos(q)[1] == [], q
+
+
+def test_company_typo_is_disclosed(offline):
+    a = core.answer("What was Telsa revenue in 2024?")
+    assert "97,690" in a.text and "“Telsa”" in a.text
+
+
+def test_llm_spellfix_cannot_rewrite_the_question(fake_llm):
+    # the "spelling fix" swaps the metric: not a near-spelling -> rejected
+    fake_llm["say"]("Waht was Tesla profit in 2025?")
+    assert voice_spell("Waht was Telsa revnue in 2025?") is None
+    fake_llm["say"]("What was Tesla revenue in 2025?")
+    out = voice_spell("Waht was Telsa revnue in 2025?")
+    assert out and out[1] == [("Waht", "What"), ("Telsa", "Tesla"), ("revnue", "revenue")]
+    fake_llm["say"]("What was Tesla revenue in 2024?")          # a number changed
+    assert voice_spell("Waht was Telsa revnue in 2025?") is None
+
+
+def voice_spell(q):
+    import voice
+    return voice.spellfix(q)
