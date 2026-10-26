@@ -5,7 +5,7 @@ every figure is copied from a filing cell, cited to its page, and refused rather
 guessed when the filing doesn't support it.
 
 **[Live demo →](https://huggingface.co/spaces/bachdo01/sec-filing-qa)** · 14 companies ·
-5,676 grounded facts · 487 tests
+5,676 grounded facts · 488 tests
 
 ---
 
@@ -83,7 +83,7 @@ pip install -r requirements.txt
 echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env   # optional; without it the app runs offline-deterministic
 
 streamlit run app.py                         # the chat app
-python3 -m pytest tests/ -q                  # 487 hermetic tests, no network
+python3 -m pytest tests/ -q                  # 488 hermetic tests, no network
 python3 benchmark.py                         # hand-verified Q/A spot checks (8/8)
 jupyter notebook demo.ipynb                  # walkthrough with traces (Tesla)
 ```
@@ -127,7 +127,7 @@ app.py        Streamlit chat UI with citations, reasoning and usage caps
 benchmark.py  hand-verified Q/A spot checks with a tolerance band
 stress_harness.py   isolated temp bank for stress-testing a new ticker
 demo.ipynb    walkthrough with traces
-tests/        487 tests: extraction, router, verifier, adversarial regressions
+tests/        488 tests: extraction, router, verifier, adversarial regressions
 design_doc/   architecture and design reasoning
 store/        the built Bank        filings/  source PDFs and HTML
 ```

@@ -1249,6 +1249,9 @@ def _answer(question: str, entity, context, holder) -> Answer:
             near = None                # another company's figure: no Tesla stand-in
             nxt = (" If you meant another company, I don't have it banked — name one "
                    "I cover and I'll pull its figures.")
+        elif any(n_ == "EBIT" for _s, n_ in q.untracked) and not q.metrics:
+            nxt = (" It isn't a line in the filing; the closest GAAP figure is operating "
+                   "income, which I can give you.")
         elif near:               # the nearest TRACKED figure, offered — never substituted
             nm = METRICS[near].name if near in METRICS else COMPUTED[near][0]
             nxt = f" If the company-wide {_lc(nm)} would help, just ask for it."
@@ -2440,20 +2443,17 @@ def _unexplained_tokens(q, ent, named) -> list:
 
 
 def _untracked_is_primary(q) -> bool:
-    """Refuse outright when the FIRST thing asked is untracked (or the question
-    asks us to substitute one figure for another); otherwise answer what we can
-    and note what was left out."""
+    """Refuse outright when nothing tracked is left, when the question asks us to
+    substitute one figure for another, or when the untracked item MODIFIES the
+    metric; otherwise answer what we can and note what was left out ("EBIT,
+    EBITDA" answers EBITDA and says EBIT isn't tracked)."""
     if not q.untracked:
         return False
     if not q.metrics or _SUBSTITUTION_RE.search(q.raw_question or ""):
         return True
     # a MODIFIER of the metric (a region, a component, per-employee, NCI) changes
     # what the metric is — never answer the unmodified figure "with a note".
-    if any(n.startswith(_MODIFIER_PREFIXES) for _s, n in q.untracked):
-        return True
-    spans = getattr(q, "_spans", {}) or {}
-    first_metric = min((spans[m][0] for m in q.metrics if m in spans), default=10**6)
-    return min(s for s, _ in q.untracked) < first_metric
+    return any(n.startswith(_MODIFIER_PREFIXES) for _s, n in q.untracked)
 
 
 def _untracked_names(q) -> str:

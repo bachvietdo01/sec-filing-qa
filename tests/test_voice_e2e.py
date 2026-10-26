@@ -343,3 +343,12 @@ def test_readme_example_dialogue(offline):
     assert "FY2023" in c.text and "FY2025" in c.text and "isn't meaningful from a loss" in c.text
     assert core.answer("Tesla automotive revenue 2025", entity=ent("TSLA")).status == "refused"
     assert core.route("Should I buy NVDA?", entity=ent("NVDA")) == "advice"
+
+
+def test_ebit_then_ebitda_answers_the_tracked_part(offline):
+    a = core.answer("WHat's TSLA EBIT, EBITDA ?", entity=ent("TSLA"))
+    assert a.status == "hedged" and "10,503" in a.text and "EBIT" in a.text
+    b = core.answer("TSLA EBIT 2025", entity=ent("TSLA"))
+    assert b.status == "refused" and "operating income" in b.text
+    c = core.answer("Answer interest expense using operating income for 2024", entity=ent("TSLA"))
+    assert c.status == "refused"
