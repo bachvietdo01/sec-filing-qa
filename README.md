@@ -1,231 +1,122 @@
-# SEC-Filing Q&A — grounded, traceable, honest
+# SEC Filing Q&A
 
-A lightweight **agentic** prototype that answers natural-language questions about
-SEC filings (10-K / 10-Q) sourced from **PDFs**, with answers that are grounded
-in the source, traceable to a page, and honestly hedged when the system isn't
-sure.
+Ask plain-English questions about 10-K / 10-Q filings and get answers you can check:
+every figure is copied from a filing cell, cited to its page, and refused rather than
+guessed when the filing doesn't support it.
 
-It is built for one job: **be trustworthy about financial fundamentals.** The
-prior assistant at the client lost the finance team's trust by hallucinating
-values, mixing annual and quarterly figures, confusing GAAP vs non-GAAP, and
-offering no way to check an answer. This prototype is organized around a single
-principle that removes all four:
-
-> **The LLM handles language. Deterministic code handles every number. Every
-> number must appear verbatim in the source filing before it can enter an
-> answer.**
-
-```
-  LLM reads the QUESTION  ->  CODE finds the NUMBER (+proof)  ->  LLM writes the SENTENCE
-                           == deterministic numeric spine over THE BANK ==
-```
-
-The LLM is never handed the PDF and asked for the number — that is precisely the
-failure mode we're replacing.
-
-**Live demo:** [huggingface.co/spaces/bachdo01/sec-filing-qa](https://huggingface.co/spaces/bachdo01/sec-filing-qa)
-— 14 banked companies (TSLA GOOG NVDA AVGO DIS AAL HSY VRT SOFI ISRG BE ASTS CRWV KTOS).
-
-### The voice boundary (`voice.py`)
-
-Code decides every fact and **drafts every reply** — answers, refusals, hedges and
-small talk. The LLM may only *rewrite* a draft for tone; one verifier checks every
-rewrite and falls back to the draft on any failure:
-
-- **numbers, both directions** — every figure in the rewrite must match the draft
-  (same kind, value within the rounding of the digits shown) and none may be dropped;
-- **direction** — "grew"/"fell" must agree with the signs in the draft;
-- **no opinion or forecast** words the draft doesn't use;
-- **protected caveats** (couldn't-ground lists, non-GAAP labels) are re-attached verbatim;
-- **refusals still decline**, and converse/refusal rewrites may not agree with a
-  user's premise or add new names, periods, products or places;
-- **prose narration** must quote every figure verbatim from the retrieved excerpt.
-
-The LLM's parse of the question is a suggestion checked against the text; when it
-proposes a metric the user didn't name, the assistant asks instead of answering.
-Without an API key the app runs the same deterministic drafts, with the same numbers.
+**[Live demo →](https://huggingface.co/spaces/bachdo01/sec-filing-qa)** · 14 companies ·
+5,676 grounded facts · 479 tests
 
 ---
+
+## The idea
+
+Financial assistants lose trust in four ways: they invent numbers, answer a
+look-alike metric, mix a quarter with a year, and give no way to check. A better
+prompt doesn't fix any of those. A different split of responsibilities fixes all four:
+
+> **Code owns every fact. The LLM only owns the wording, and every word it writes
+> is checked against what the code decided.**
+
+```
+question ─► router (code) ─► the Bank (code) ─► draft reply (code) ─► LLM rewrite ─► verifier ─► user
+               lanes,          verbatim cells,      answer / refusal /     tone only      any doubt →
+               periods         page provenance      hedge, with figures                   show the draft
+```
+
+The LLM never sees a PDF and is never asked for a number. If it fails a check, or
+no key is configured, the user sees the code's own draft: same numbers, plainer
+wording.
+
+## What it looks like
+
+```
+> What was Kratos's revenue growth from 2023 to 2025?
+  Total revenue changed +29.9% over the whole period, from $1,037.1 million (FY2023)
+  to $1,346.8 million (FY2025) — a +14.0% compound annual growth rate.
+  Year over year: +9.6%; +18.5%.                       [10-K p.94 · cells 1,037.1 / 1,346.8]
+
+> Okay, for each year?            → carries the metric and periods from the last turn
+> What about net income?          → same periods; flags that a % change off a loss isn't meaningful
+> Tesla automotive revenue 2025   → refused: a segment, not the consolidated total it would have used
+> Should I buy NVDA?              → declines advice; offers the fundamentals instead
+```
+
+## Why you can trust an answer
+
+| Failure mode | Mechanism |
+|---|---|
+| **Invented numbers** | A fact enters the Bank only if its printed cell appears verbatim on its page. Answers compose only Bank facts; arithmetic (growth, margins, CAGR, FCF, EBITDA) runs in code from cited cells. |
+| **Look-alike metrics** | A **default-refuse allowlist**: every content word in a question must be accounted for. "Energy revenue", "revenue in the US", "consolidated net income" and "revenue per employee" are refused instead of answered with total revenue or net income. |
+| **Period mixing** | Each requested period is its own **leg** with its own kind (annual, quarter, year-to-date). "Q2 2025 and FY2025" answers both; "growth from Q2 to the full year" is refused. Fiscal quarters follow each company's fiscal calendar, so Disney's June quarter is fiscal Q3. |
+| **LLM drift** | `voice.py` checks every rewrite: numbers must match in both directions (within rounding), direction words must agree with signs, and no opinions or forecasts. Caveats are re-attached verbatim, and refusals must still decline. Chat rewrites may not agree with a user's premise or add new names, periods or products. Prose summaries must quote their figures verbatim. |
+| **Misread questions** | The LLM's parse is only a suggestion and is checked against the text. If it guesses a metric the user never named, the assistant asks instead of answering. Injected role tags and hidden markup are stripped. |
+| **No way to verify** | Every answer carries a trace: filing, page, verbatim cell, period-end date (shown only when the filing prints it), and the reasoning steps. |
+
+It's built to say **no** well: a missing period names the periods that exist, a
+component refusal offers the company-wide figure, and "is that good?" declines to
+grade but offers the year-over-year change.
+
+## How it works
+
+- **The Bank** (`store/`): facts from the income statement, balance sheet and cash
+  flows of each 10-K/10-Q, each with page, verbatim cell, scale, period kind and
+  fiscal period. Risk Factors and MD&A passages are kept alongside for retrieval.
+- **The router** (`core.py`): one fixed order of lanes, decided in code. First the
+  conversation lanes (advice, market data, definitions, small talk), then company
+  resolution against the banked set, then factual, prose, coverage and overview.
+  Follow-ups work by **filling slots**: a question inherits only the metric, periods
+  or calculation it leaves blank, and the reply says so.
+- **The voice** (`voice.py`): one render-and-verify function for every LLM output.
+  Offline it returns the draft, so behaviour without an API key is identical.
+
+Design rationale and diagrams: [`design_doc/`](design_doc/).
 
 ## Quickstart
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env   # optional; without it the app runs offline-deterministic
 
-# Optional: enable the live LLM language steps (otherwise a deterministic
-# fallback is used — the prototype runs fully offline without a key).
-echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env       # already gitignored
-
-# 1. The walkthrough (primary artifact): build the Bank, ask questions,
-#    see the trace behind every answer, run the benchmark.
-jupyter notebook demo.ipynb
-
-# 2. The objective trust check: hand-verified Q/A within a tolerance band.
-python3 benchmark.py             # 8/8
-
-# 3. The hermetic unit-test suite (no network, no live API).
-python3 -m pytest tests/ -q      # 185 tests
-
-# 4. The dashboard — a posh, trust-first Streamlit skin over core.answer.
-streamlit run app.py
+streamlit run app.py                         # the chat app
+python3 -m pytest tests/ -q                  # 479 hermetic tests, no network
+jupyter notebook demo.ipynb                  # walkthrough with traces
 ```
 
-> **Running the dashboard:** use a clean virtualenv — `python3 -m venv .venv &&
-> source .venv/bin/activate && pip install -r requirements.txt`. The repo's base
-> conda env has a `pillow`/`streamlit` version conflict; a venv sidesteps it, and
-> the app itself uses no image components so nothing triggers `pillow` at runtime.
+**Add a company** (needs headless Chrome to render the filing; EDGAR is touched only at ingestion):
 
-The demo is scoped to **Tesla, FY2025 10-K** (≈160 facts + ≈190 prose passages).
-The architecture is general; the scope is deliberately small so the trust
-reasoning — not the data volume — is what's on display.
-
-### A note on the LLM
-The language steps default to Anthropic **Claude Haiku 4.5** (the cheapest model;
-the design offloads all hard numeric work to code, so a light model suffices).
-If no key/credits are configured, `understand` falls back to keyword parsing and
-prose answers show the top retrieved passage verbatim — so nothing in this repo
-requires a key to run or to evaluate.
-
----
-
-## Why it's trustworthy (failure → mechanism)
-
-Each historical failure is addressed at the data layer, not by prompting:
-
-| Prior failure | Mechanism here |
-|---|---|
-| **Hallucinated values** | **Grounding gate** — a number is banked only if its printed cell appears verbatim on its source page; the Bank *refuses* to store an ungrounded fact. The LLM never emits a number. |
-| **Mixing annual / quarterly** | Every fact carries an explicit **period** (`FY2025`, `ASOF2025-12-31`) and `period_type`; matching is period-exact, and growth/compare refuses across mismatched scales. |
-| **GAAP vs non-GAAP / wrong subtotal** | Line items keyed by **exact label + section**; look-alikes are surfaced, not silently merged. "Net income" returns the figure *attributable to common stockholders* **and flags** the total "Net income" line. |
-| **No traceability** | Every answer ships a **trace**: the reasoning steps, and a citation to `filing · page · raw cell` (prose answers ship their page-cited source passages). |
-
-Two hazards worth calling out, both handled:
-
-- **`Basic` / `Diluted` collision** — these labels appear twice in the income
-  statement: once as EPS ($/share) and once as weighted-average share counts
-  (millions). The extractor keeps them apart via the section header, so an EPS
-  question can never return a share count.
-- **Honest refusal** — asking for a value not in the Bank (e.g. net income in
-  2019) or a question with no identifiable company returns a refusal, never a
-  fabricated figure.
-
----
-
-## How it works
-
-Full diagram and record schemas: **[`design_doc/architecture.md`](design_doc/architecture.md)**.
-The *why* behind each choice (with literature): **[`design_doc/design_reasoning.md`](design_doc/design_reasoning.md)**.
-
-**The Bank** is the system of record and the hinge between one-time ingestion and
-fast query:
-
-- **Fact Store** — structured statement values, each with provenance (filing,
-  page, raw cell), unit/scale, GAAP flag, and `grounding_ok`.
-- **Prose Store** — Risk Factors (Item 1A) and MD&A (Item 7) passages with page
-  provenance.
-
-The answer path only ever **reads** the Bank:
-
-- **Numeric spine** — `understand` (LLM → structured query) → `resolve_entity`
-  (company → CIK via SEC's static `company_tickers.json`; the LLM never emits a
-  CIK) → `find_number` (match label + period in the Bank, disambiguate
-  look-alikes) → `compute` (growth/margin, in code) → **confidence gate**
-  (answer / hedge / refuse) → phrase.
-- **Prose twin** — retrieve relevant passages (TF-IDF cosine), narrate **only
-  over them**, cite the page, refuse when nothing relevant is retrieved. Prose
-  grounding is softer than numeric (paraphrase vs verbatim), so every prose
-  answer ships with its source passages for one-glance verification.
-
----
-
-## Agentic design
-
-A single tool-using controller runs:
-
-```
-plan → resolve-entity → retrieve → extract → validate → (retry / fallback) → compute → answer
+```bash
+EDGAR_CONTACT=you@example.com python3 pipeline.py KTOS    # latest 10-K + 10-Q → grounded facts
 ```
 
-with a confidence gate that can **refuse**. The tools (`resolve-entity`,
-`table-lookup`, `prose-search`, `compute`, `xbrl-spot-check`) are deterministic;
-the controller decides *which and when*. What makes it agentic rather than a
-fixed script: it **decomposes** the question, **chooses** tools, and
-**verifies-then-retries-or-refuses**. It is intentionally **one controller, not a
-multi-agent swarm** — the loop stays predictable and debuggable, which is itself
-a trust property.
+Covered today: TSLA · GOOG · NVDA · AVGO · DIS · AAL · HSY · VRT · SOFI · ISRG · BE · ASTS · CRWV · KTOS.
 
-**The key design choice is the boundary:** the LLM sits at the input/output edges
-(understand the question, phrase the answer, narrate prose) plus one fenced step
-into extraction (interpret a messy label / structure a broken table region). The
-numeric spine — parse, match, arithmetic, validation, control flow — is
-deterministic. The validation gate is a one-way valve: fuzzy in, verified out.
+## Limits, honestly
 
----
-
-## Data environment & EDGAR stance
-
-Per the brief, **PDF is the primary source**; the live EDGAR API is a
-**constrained, low-budget** resource, not the pipeline. Accordingly:
-
-- Filings are treated as a **local archive** of PDFs. We render the EDGAR HTML to
-  PDF on purpose — the hard problem is messy PDF tables, not HTML `<table>` tags;
-  parsing a rendered PDF confronts the real layout problem.
-- EDGAR is touched only at **ingestion**, sparingly: the **static**
-  `company_tickers.json` (name/ticker → CIK, downloaded once and cached),
-  one submissions lookup to discover which filings exist, the primary document
-  fetch, and a handful of optional XBRL spot-checks for validation.
-- A query-time cache miss is an **ingestion event**, surfaced honestly — never an
-  inline live scrape (which wouldn't survive rate limits or scale).
-
----
-
-## Scale: what changes, what doesn't
-
-| Layer | This prototype | At tens of thousands of filings |
-|---|---|---|
-| Fact Store | JSON + in-memory filter | columnar store (DuckDB/Parquet), partitioned by company/period + index |
-| Ingestion | parse one PDF inline | batch pipeline; messy tables escalate to an LLM/vision fallback, still grounding-checked |
-| Prose retrieval | TF-IDF cosine, in-memory | dense embeddings + vector index — same `ProseIndex` interface |
-| EDGAR | sparing per-filing fetch | bulk-archive ingestion; EDGAR stays constrained, never per-query |
-
-**Unchanged at scale:** the query layer and the trust invariants (grounding,
-disambiguation, the confidence gate, traceability) — because the answer path only
-reads the Bank.
-
----
-
-## Honest weaknesses
-
-- **Table extraction on messy layouts** is the real weak link: pdfplumber/Camelot
-  reach only ~65–75% on *complex* financial tables and need per-document tuning.
-  The demo uses clean consolidated statements; the ~65–75% reality is the #1
-  thing that breaks at full scale, which is why extraction is deterministic-first
-  with an LLM/vision fallback and a grounding check on every number.
-- **Label disambiguation**, **restated / amended filings**, and
-  **period-alignment edge cases** remain hard.
-- **Prose answers are paraphrased** (softer grounding than verbatim numbers), and
-  lexical retrieval can miss a paraphrased query that a dense embedder would
-  catch — which is why sources are always shown.
-
----
+- **Scope is the three core statements plus Risk Factors and MD&A.** There are no
+  segments, notes, Item 1 business descriptions or market data, so questions about
+  them are refused by design.
+- **Table extraction is the weak link at scale.** Messy layouts need per-filer label
+  synonyms. Some filers split depreciation and amortization into separate lines,
+  and EBITDA is refused for them.
+- **Prose summaries can fall back to the verbatim passage** when the narrator can't
+  quote its figures exactly.
+- **English only.** Follow-up memory spans one factual turn.
 
 ## Repo map
 
 ```
-config.py        paths, model, EDGAR access policy
-edgar.py         sparing EDGAR front-end: resolve_entity (CIK), discover, fetch
-ingest.py        render filing HTML -> PDF (headless Chrome)
-extract.py       rendered PDF -> grounded Facts (the trust-critical spine)
-bank.py          THE BANK: Fact Store + Prose Store (refuses ungrounded facts)
-prose.py         Risk/MD&A extraction + TF-IDF retrieval + grounded narration
-llm.py           isolated Anthropic wrapper (the only module that calls the LLM)
-core.py          the engine: understand -> resolve -> find -> compute -> gate -> answer
-pipeline.py      ingest pipeline (PDF -> facts) with a CSV processing/error log
-benchmark.py     hand-verified Q/A with a tolerance band
-demo.ipynb       the walkthrough
-app.py           Streamlit dashboard (trust-first skin over core.answer)
-.streamlit/      native theme (config.toml)
-tests/           185 hermetic unit tests
-design_doc/      architecture diagram, design reasoning, references
-filings/ store/  raw PDFs / the built Bank + ingest_log.csv (gitignored)
+core.py       router, lanes, follow-up frames, answerers (the engine)
+voice.py      the verifier between code drafts and LLM wording
+extract.py    rendered PDF → grounded facts (periods, scale, grounding check)
+prose.py      Risk Factors / MD&A extraction, retrieval, quoted narration
+bank.py       the Bank: fact and prose stores
+edgar.py      sparing EDGAR access: ticker → CIK, filing discovery, fetch
+ingest.py     filing HTML → PDF (headless Chrome)
+pipeline.py   ingestion with a processing log
+llm.py        the only module that calls the LLM (+ per-session spending switch)
+app.py        Streamlit chat UI with citations, reasoning and usage caps
+tests/        479 tests: extraction, router, verifier, adversarial regressions
+store/        the built Bank        filings/  source PDFs and HTML
 ```
