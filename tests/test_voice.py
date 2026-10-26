@@ -202,3 +202,20 @@ def test_prose_figures_must_be_quoted_verbatim():
             'decreased by $176 million" [p.72].')
     assert voice.verify_prose(bad, passages, [72], require_quotes=True) != "OK"
     assert voice.verify_prose(good, passages, [72], require_quotes=True) == "OK"
+
+
+def test_prose_quote_may_elide_but_not_invent():
+    p = [{"text": "Our service providers have been subject to security breaches and we may "
+                  "suffer losses.", "page_start": 23}]
+    ok = 'Risks: "service providers...have been subject to security breaches" [p.23].'
+    bad = 'Risks: "service providers have been hacked" [p.23].'
+    assert voice.verify_prose(ok, p, [23], require_quotes=True) == "OK"
+    assert voice.verify_prose(bad, p, [23], require_quotes=True) != "OK"
+
+
+def test_chat_may_name_the_users_company_but_not_new_facts():
+    d = "I don't give investment advice. I can show you NVIDIA CORP's fundamentals instead."
+    assert voice.verify("chat", d, "I can't tell you whether to buy NVDA, but I can walk you "
+                        "through NVIDIA's fundamentals.", names="NVDA NVIDIA CORP") == "OK"
+    assert voice.verify("chat", d, "NVDA is based in Santa Clara; I can show fundamentals.",
+                        names="NVDA NVIDIA CORP") != "OK"

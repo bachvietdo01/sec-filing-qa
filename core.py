@@ -3260,8 +3260,12 @@ def _chat(q, ent, intent: str, tr) -> Answer:
               else "answered")
     draft = _chat_draft(q, ent, intent)
     years = " ".join(_re.findall(r"\b(?:19|20)\d{2}\b", q.raw_question or ""))
+    # the company the user named (or has in focus) may be named back
+    names = " ".join([ent.ticker, ent.title] if ent else []) + " " + " ".join(
+        f"{e_.ticker} {e_.title}" for e_ in _companies_named(q.raw_question or ""))
+    names = _re.sub(r"[^\w\s&.-]", " ", names)
     text = voice.render("chat", draft, q.raw_question, trace=tr, max_tokens=180,
-                        allowed_text=years)
+                        allowed_text=years, names=names)
     return Answer(text, 0.6, status, tr)
 
 

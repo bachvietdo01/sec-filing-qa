@@ -260,7 +260,7 @@ _AFFIRM = re.compile(r"^\W*(?:yes|yep|yeah|yup|correct|right|exactly|indeed|abso
                      r"definitely|sure thing|that's right|you're right|true)\b", re.I)
 
 
-def _claim_risk(out: str, draft: str) -> str:
+def _claim_risk(out: str, draft: str, names: str = "") -> str:
     """A converse / refusal / hedge rewrite may use any ordinary English, but not
     introduce a CLAIM: agreeing with the user's premise, a new proper noun, or a
     new domain word (a period, product, place, coverage or market term)."""
@@ -271,7 +271,8 @@ def _claim_risk(out: str, draft: str) -> str:
         w = re.sub(r"['’]s$", "", m.group(1)).strip(".'’-")
         if len(w) <= 1 or re.match(r"\d", out[m.end(1):m.end(1) + 1] or " "):
             continue                          # "Q2", single letters
-        if w.lower() not in draft_l and w not in ("I", "I'm", "I'd", "I'll", "I've", "SEC",
+        if w.lower() not in draft_l and w.lower() not in names.lower().split() and w not in (
+                                                    "I", "I'm", "I'd", "I'll", "I've", "SEC",
                                                     "GAAP", "EPS", "MD&A", "Item"):
             return f"new proper noun: {w}"
     draft_stems = {_stem(w) for w in re.findall(r"[A-Za-z]+", draft_l)}
@@ -300,7 +301,8 @@ def _content_words(text: str) -> set:
 
 
 def verify(mode: str, draft: str, out: str, *, labels=(), must_keep=(),
-           allowed_text: str = "", optional_text: str = "", question: str = "") -> str:
+           allowed_text: str = "", optional_text: str = "", question: str = "",
+           names: str = "") -> str:
     """'OK' or the reason the rewrite is rejected.
     mode: answer | refusal | hedge | chat. `optional_text` holds draft numbers the
     rewrite may drop (a margin's numerator/denominator); `allowed_text` holds
@@ -312,7 +314,7 @@ def verify(mode: str, draft: str, out: str, *, labels=(), must_keep=(),
         # the decisive leash: a rewrite may restyle the draft but not add a single
         # new content word — no "Austin", "IPO", "8-Ks", "solar", "quarterly
         # comparisons" — so it cannot agree with a premise or assert a fact
-        risk = _claim_risk(out, draft)
+        risk = _claim_risk(out, draft, names)
         if risk:
             return risk
         if _new_words(_SPELLED_NUM, out, draft):
@@ -461,7 +463,7 @@ _COMPUTE_PARENS = re.compile(r"\([^()]*\$[^()]*(?:/|−|\+ D&A|−\s*capex)[^()]
 
 
 def render(mode: str, draft: str, question: str = "", *, labels=(), trace=None,
-           max_tokens: int = 260, allowed_text: str = "") -> str:
+           max_tokens: int = 260, allowed_text: str = "", names: str = "") -> str:
     """LLM rewrite of `draft` (answer | refusal | hedge | chat), verified; the
     draft on failure."""
     if not llm.available() or not draft:
@@ -482,7 +484,8 @@ def render(mode: str, draft: str, question: str = "", *, labels=(), trace=None,
     except Exception:
         return draft
     verdict = verify(mode, body, out, labels=labels, must_keep=must,
-                     optional_text=optional, allowed_text=allowed_text, question=question)
+                     optional_text=optional, allowed_text=allowed_text, question=question,
+                     names=names)
     if trace is not None:
         trace.steps.append(f"voice[{mode}]: {'LLM rewrite verified' if verdict == 'OK' else 'fallback to draft — ' + verdict}")
     if verdict != "OK":
@@ -512,7 +515,11 @@ def verify_prose(out: str, passages, pages, require_quotes: bool = False) -> str
     if require_quotes:
         flat = re.sub(r"\s+", " ", src).lower()
         quoted = re.findall(r"[\"“]([^\"”]{3,})[\"”]", out or "")
-        bad_q = [q for q in quoted if re.sub(r"\s+", " ", q).strip(" .,;").lower() not in flat]
+        def _verbatim(q):
+            parts = [re.sub(r"\s+", " ", p_).strip(" .,;").lower()
+                     for p_ in re.split(r"\.\.\.|…", q)]
+            return all(p_ in flat for p_ in parts if len(p_) >= 3)
+        bad_q = [q for q in quoted if not _verbatim(q)]
         if bad_q:
             return f"quote not verbatim from the excerpts: {bad_q[0][:40]!r}"
         unquoted = re.sub(r"[\"“][^\"”]{3,}[\"”]", " ", out or "")
